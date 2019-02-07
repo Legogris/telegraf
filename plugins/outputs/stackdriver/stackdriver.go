@@ -19,10 +19,10 @@ import (
 
 // Stackdriver is the Google Stackdriver config info.
 type Stackdriver struct {
-	Project   string
-	Namespace string
-
-	client *monitoring.MetricClient
+	Project          string `toml:"project"`
+	Namespace        string `toml:"namespace"`
+	MetricsBatchSize int    `toml:"metrics_batch_size"`
+	client           *monitoring.MetricClient
 }
 
 const (
@@ -51,7 +51,10 @@ var sampleConfig = `
   project = "erudite-bloom-151019"
 
   # The namespace for the metric descriptor
-  namespace = "telegraf"
+	namespace = "telegraf"
+	
+	# The maximum number of datapoints per request
+	metrics_batch_size = 200
 `
 
 // Connect initiates the primary connection to the GCP project.
@@ -62,6 +65,10 @@ func (s *Stackdriver) Connect() error {
 
 	if s.Namespace == "" {
 		return fmt.Errorf("Namespace is a required field for stackdriver output")
+	}
+
+	if s.MetricsBatchSize == 0 {
+		s.MetricsBatchSize = 200
 	}
 
 	if s.client == nil {
@@ -93,13 +100,12 @@ func sorted(metrics []telegraf.Metric) []telegraf.Metric {
 // Write the metrics to Google Cloud Stackdriver.
 func (s *Stackdriver) Write(metrics []telegraf.Metric) error {
 	ctx := context.Background()
-
 	batch := sorted(metrics)
-
-	for _, m := range batch {
-		timeSeries := []*monitoringpb.TimeSeries{}
-
-		for _, f := range m.FieldList() {
+	timeSeries := []*monitoringpb.TimeSeries{}
+	log.Printf("#START")
+	for i, m := range batch {
+		fieldList := m.FieldList()
+		for j, f := range fieldList {
 			value, err := getStackdriverTypedValue(f.Value)
 			if err != nil {
 				log.Printf("E! [outputs.stackdriver] get type failed: %s", err)
@@ -107,6 +113,7 @@ func (s *Stackdriver) Write(metrics []telegraf.Metric) error {
 			}
 
 			if value == nil {
+				log.Printf("#SKIPPED")
 				continue
 			}
 
@@ -146,18 +153,41 @@ func (s *Stackdriver) Write(metrics []telegraf.Metric) error {
 						dataPoint,
 					},
 				})
-		}
 
-		if len(timeSeries) < 1 {
-			continue
-		}
+			if len(timeSeries) < s.MetricsBatchSize && (i < len(batch) - 1 || j < len(fieldList) - 1) {
+				log.Printf("#CONTINUE; i:%d/%d, j:%d/%d", i, len(batch), j, len(fieldList))
+				continue
+			}
 
+			// Prepare time series request.
+			timeSeriesRequest := &monitoringpb.CreateTimeSeriesRequest{
+				Name:       monitoring.MetricProjectPath(s.Project),
+				TimeSeries: timeSeries,
+			}
+
+			log.Printf("#WRITING: %d", len(timeSeries))
+			// Create the time series in Stackdriver.
+			err = s.client.CreateTimeSeries(ctx, timeSeriesRequest)
+			if err != nil {
+				if strings.Contains(err.Error(), errStringPointsOutOfOrder) ||
+					strings.Contains(err.Error(), errStringPointsTooOld) ||
+					strings.Contains(err.Error(), errStringPointsTooFrequent) {
+					log.Printf("D! [outputs.stackdriver] unable to write to Stackdriver: %s", err)
+					return nil
+				}
+				log.Printf("E! [outputs.stackdriver] unable to write to Stackdriver: %s", err)
+				return err
+			}
+			timeSeries = []*monitoringpb.TimeSeries{}
+		}
+	}
+	if len(timeSeries) > 0 {
 		// Prepare time series request.
 		timeSeriesRequest := &monitoringpb.CreateTimeSeriesRequest{
 			Name:       monitoring.MetricProjectPath(s.Project),
 			TimeSeries: timeSeries,
 		}
-
+		log.Printf("#WRITINGLAST: %d", len(timeSeries))
 		// Create the time series in Stackdriver.
 		err := s.client.CreateTimeSeries(ctx, timeSeriesRequest)
 		if err != nil {

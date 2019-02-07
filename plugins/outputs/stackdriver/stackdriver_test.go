@@ -139,9 +139,10 @@ func TestWriteAscendingTime(t *testing.T) {
 	err = s.Write(metrics)
 	require.NoError(t, err)
 
-	require.Len(t, mockMetric.reqs, 2)
+	require.Len(t, mockMetric.reqs, 1)
 	request := mockMetric.reqs[0].(*monitoringpb.CreateTimeSeriesRequest)
-	require.Len(t, request.TimeSeries, 1)
+	require.Len(t, request.TimeSeries, 2)
+
 	ts := request.TimeSeries[0]
 	require.Len(t, ts.Points, 1)
 	require.Equal(t, ts.Points[0].Interval, &monitoringpb.TimeInterval{
@@ -155,9 +156,7 @@ func TestWriteAscendingTime(t *testing.T) {
 		},
 	})
 
-	request = mockMetric.reqs[1].(*monitoringpb.CreateTimeSeriesRequest)
-	require.Len(t, request.TimeSeries, 1)
-	ts = request.TimeSeries[0]
+	ts = request.TimeSeries[1]
 	require.Len(t, ts.Points, 1)
 	require.Equal(t, ts.Points[0].Interval, &monitoringpb.TimeInterval{
 		EndTime: &googlepb.Timestamp{
