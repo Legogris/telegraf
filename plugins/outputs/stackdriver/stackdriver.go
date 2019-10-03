@@ -8,6 +8,7 @@ import (
 	"path"
 	"sort"
 	"strings"
+	"time"
 
 	monitoring "cloud.google.com/go/monitoring/apiv3" // Imports the Stackdriver Monitoring client package.
 	googlepb "github.com/golang/protobuf/ptypes/timestamp"
@@ -22,10 +23,11 @@ import (
 
 // Stackdriver is the Google Stackdriver config info.
 type Stackdriver struct {
-	Project        string
-	Namespace      string
-	ResourceType   string            `toml:"resource_type"`
-	ResourceLabels map[string]string `toml:"resource_labels"`
+	Project                   string
+	Namespace                 string
+	ResourceType              string            `toml:"resource_type"`
+	ResourceLabels            map[string]string `toml:"resource_labels"`
+	CumulativeIntervalSeconds int64             `toml:"cumulative_interval_seconds"`
 
 	client *monitoring.MetricClient
 }
@@ -41,8 +43,6 @@ const (
 	// to string length for label value.
 	QuotaStringLengthForLabelValue = 1024
 
-	// StartTime for cumulative metrics.
-	StartTime = int64(1)
 	// MaxInt is the max int64 value.
 	MaxInt = int(^uint(0) >> 1)
 
@@ -67,6 +67,8 @@ var sampleConfig = `
   #   namespace = "myapp"
   #   location = "eu-north0"
 `
+
+var defaultStartTime = time.Now().Unix()
 
 // Connect initiates the primary connection to the GCP project.
 func (s *Stackdriver) Connect() error {
@@ -159,7 +161,14 @@ func (s *Stackdriver) Write(metrics []telegraf.Metric) error {
 				continue
 			}
 
-			timeInterval, err := getStackdriverTimeInterval(metricKind, StartTime, m.Time().Unix())
+			var startTime, endTime int64 = defaultStartTime, m.Time().Unix()
+			if s.CumulativeIntervalSeconds > 0 {
+				startTime = m.Time().Unix() % s.CumulativeIntervalSeconds
+				if endTime == startTime {
+					endTime += 1
+				}
+			}
+			timeInterval, err := getStackdriverTimeInterval(metricKind, startTime, endTime)
 			if err != nil {
 				log.Printf("E! [outputs.stackdriver] get time interval failed: %s", err)
 				continue
