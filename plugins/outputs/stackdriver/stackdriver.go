@@ -165,13 +165,14 @@ func (s *Stackdriver) Write(metrics []telegraf.Metric) error {
 			}
 
 			var startTime, endTime int64 = defaultStartTime, m.Time().Unix()
+			var endTimeNanos int32 = 0
 			if s.CumulativeIntervalSeconds > 0 {
 				startTime = m.Time().Unix() % s.CumulativeIntervalSeconds
 				if endTime == startTime {
-					endTime += 1
+					endTimeNanos = 1000000
 				}
 			}
-			timeInterval, err := getStackdriverTimeInterval(metricKind, startTime, endTime)
+			timeInterval, err := getStackdriverTimeInterval(metricKind, startTime, 0, endTime, endTimeNanos)
 			if err != nil {
 				log.Printf("E! [outputs.stackdriver] get time interval failed: %s", err)
 				continue
@@ -254,22 +255,27 @@ func (s *Stackdriver) Write(metrics []telegraf.Metric) error {
 func getStackdriverTimeInterval(
 	m metricpb.MetricDescriptor_MetricKind,
 	start int64,
+	startNanos int32,
 	end int64,
+	endNanos int32,
 ) (*monitoringpb.TimeInterval, error) {
 	switch m {
 	case metricpb.MetricDescriptor_GAUGE:
 		return &monitoringpb.TimeInterval{
 			EndTime: &googlepb.Timestamp{
 				Seconds: end,
+				Nanos:   endNanos,
 			},
 		}, nil
 	case metricpb.MetricDescriptor_CUMULATIVE:
 		return &monitoringpb.TimeInterval{
 			StartTime: &googlepb.Timestamp{
 				Seconds: start,
+				Nanos:   startNanos,
 			},
 			EndTime: &googlepb.Timestamp{
 				Seconds: end,
+				Nanos:   endNanos,
 			},
 		}, nil
 	case metricpb.MetricDescriptor_DELTA, metricpb.MetricDescriptor_METRIC_KIND_UNSPECIFIED:
